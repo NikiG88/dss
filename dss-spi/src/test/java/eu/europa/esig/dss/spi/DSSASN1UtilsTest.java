@@ -108,6 +108,17 @@ class DSSASN1UtilsTest {
 	}
 
 	@Test
+	void computeSkiFromCertMatchesBouncyCastle() {
+		String[] files = { "CZ.cer", "CZ_CA.cer", "TSA_BE.cer", "TSP_Certificate_2014.crt", "belgiumrca2-self-sign.crt",
+				"belgiumrs2.crt", "citizen_ca.cer", "ec.europa.eu.crt", "ecdsa.cer", "good-user.crt", "john_doe_tc.crt",
+				"peru_CA.cer", "peru_client.cer", "sk_ca.cer", "sk_user.cer", "zz-cert.cer" };
+		for (String file : files) {
+			CertificateToken token = DSSUtils.loadCertificate(new File("src/test/resources/" + file));
+			assertArrayEquals(DSSASN1Utils.computeSkiFromCertPublicKey(token.getPublicKey()), DSSASN1Utils.computeSkiFromCert(token), file);
+		}
+	}
+
+	@Test
 	void getCertificateHolder() {
 		CertificateToken token = DSSUtils.loadCertificate(new File("src/test/resources/ec.europa.eu.crt"));
 		X509CertificateHolder certificateHolder = DSSASN1Utils.getX509CertificateHolder(token);
