@@ -20,6 +20,7 @@
  */
 package eu.europa.esig.dss.model.x509;
 
+import eu.europa.esig.dss.enumerations.DigestAlgorithm;
 import eu.europa.esig.dss.enumerations.KeyUsageBit;
 import eu.europa.esig.dss.enumerations.SignatureAlgorithm;
 import eu.europa.esig.dss.enumerations.SignatureValidity;
@@ -31,6 +32,7 @@ import eu.europa.esig.dss.model.identifier.TokenIdentifier;
 
 import javax.security.auth.x500.X500Principal;
 import java.math.BigInteger;
+import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.PublicKey;
 import java.security.cert.CertificateEncodingException;
@@ -77,6 +79,12 @@ public class CertificateToken extends Token {
      * URL used to download a certificate from (used in aia.caIssuers download operation)
      */
     private String sourceURL;
+
+    /**
+     * Cached SHA-1 of the subjectPublicKey BIT STRING (RFC 5280, 4.2.1.2 method 1). This attribute stays null till
+     * the first call to {@link #getPublicKeySki()} function.
+     */
+    private transient volatile byte[] publicKeySki;
 
     /**
      * Creates a CertificateToken wrapping the provided X509Certificate.
@@ -132,6 +140,80 @@ public class CertificateToken extends Token {
      */
     public PublicKey getPublicKey() {
         return x509Certificate.getPublicKey();
+    }
+
+    /**
+     * Returns the SHA-1 digest of the certificate's subjectPublicKey BIT STRING value (excluding the tag, the length
+     * and the number of unused bits), as defined in RFC 5280, section 4.2.1.2, method (1).
+     * The value is computed once per token and is used to match a key-based identifier (e.g. OCSP ResponderID byKey).
+     *
+     * @return a copy of the SHA-1 digest of the subjectPublicKey
+     */
+    public byte[] getPublicKeySki() {
+        byte[] ski = publicKeySki;
+        if (ski == null) {
+            ski = computePublicKeySki(getPublicKey());
+            publicKeySki = ski;
+        }
+        return ski.clone();
+    }
+
+    private static byte[] computePublicKeySki(PublicKey publicKey) {
+        try {
+            return DigestAlgorithm.SHA1.getMessageDigest().digest(getSubjectPublicKeyBits(publicKey.getEncoded()));
+        } catch (NoSuchAlgorithmException e) {
+            throw new DSSException(String.format("Unable to compute ski from public key : %s", e.getMessage()), e);
+        }
+    }
+
+    /**
+     * Extracts the subjectPublicKey bits from a DER-encoded SubjectPublicKeyInfo:
+     * SEQUENCE { algorithm AlgorithmIdentifier (SEQUENCE), subjectPublicKey BIT STRING }
+     */
+    private static byte[] getSubjectPublicKeyBits(byte[] encoded) {
+        if (encoded == null) {
+            throw new DSSException("Unable to compute ski from public key : no encoded form");
+        }
+        int[] spki = readDerHeader(encoded, 0, 0x30);
+        if (spki[0] + spki[1] != encoded.length) {
+            throw new DSSException("Unable to compute ski from public key : unexpected SubjectPublicKeyInfo length");
+        }
+        int[] algorithm = readDerHeader(encoded, spki[0], 0x30);
+        int[] bitString = readDerHeader(encoded, algorithm[0] + algorithm[1], 0x03);
+        if (bitString[1] < 1 || encoded[bitString[0]] != 0) {
+            throw new DSSException("Unable to compute ski from public key : subjectPublicKey is not octet aligned");
+        }
+        return Arrays.copyOfRange(encoded, bitString[0] + 1, bitString[0] + bitString[1]);
+    }
+
+    /**
+     * Reads a DER tag and definite length at {@code offset}.
+     *
+     * @return {contentOffset, contentLength}
+     */
+    private static int[] readDerHeader(byte[] der, int offset, int expectedTag) {
+        if (offset + 2 > der.length || (der[offset] & 0xFF) != expectedTag) {
+            throw new DSSException(String.format("Unable to compute ski from public key : expected DER tag 0x%02X", expectedTag));
+        }
+        int first = der[offset + 1] & 0xFF;
+        int position = offset + 2;
+        int length;
+        if (first < 0x80) {
+            length = first;
+        } else {
+            int lengthBytes = first & 0x7F;
+            if (lengthBytes == 0 || lengthBytes > 4 || position + lengthBytes > der.length) {
+                throw new DSSException("Unable to compute ski from public key : unsupported DER length");
+            }
+            length = 0;
+            for (int i = 0; i < lengthBytes; i++) {
+                length = (length << 8) | (der[position++] & 0xFF);
+            }
+        }
+        if (length < 0 || length > der.length - position) {
+            throw new DSSException("Unable to compute ski from public key : truncated DER content");
+        }
+        return new int[] { position, length };
     }
 
     /**

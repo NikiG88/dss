@@ -503,7 +503,7 @@ public final class DSSASN1Utils {
 	 * @return byte array of public key's SHA-1 hash
 	 */
 	public static byte[] computeSkiFromCert(final CertificateToken certificateToken) {
-		return computeSkiFromCertPublicKey(certificateToken.getPublicKey());
+		return certificateToken.getPublicKeySki();
 	}
 
 	/**
